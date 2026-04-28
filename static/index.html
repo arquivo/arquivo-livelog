@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Arquivo.pt Live Log Analysis</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+
+  <!-- ── Header ── -->
+  <header>
+    <div class="header-inner">
+      <div class="header-brand">
+        <svg class="brand-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <rect x="2" y="3" width="20" height="14" rx="2"/>
+          <path d="M8 21h8M12 17v4"/>
+          <path d="M6 8h.01M9 8h6M6 11h12"/>
+        </svg>
+        <div class="brand-text">
+          <span class="brand-name">Arquivo.pt</span>
+          <span class="brand-sub">Live Log Analysis</span>
+        </div>
+      </div>
+
+      <div class="header-meta">
+        <span id="log-file-badge" class="log-file-label" title="Log file being monitored">—</span>
+        <span class="log-file-label" id="footer-tail-label">Loaded: <span id="footer-tail">—</span> lines</span>
+        <div class="ws-indicator">
+          <span id="ws-dot" class="ws-dot disconnected"></span>
+          <span id="ws-label" class="ws-label">connecting…</span>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- ── Error bar ── -->
+  <div id="error-bar" class="error-bar hidden"></div>
+
+  <!-- ── Stats strip ── -->
+  <section class="stats-strip">
+    <div class="stat-card">
+      <div class="stat-value" id="stat-total">—</div>
+      <div class="stat-label">Total Requests</div>
+    </div>
+    <div class="stat-divider"></div>
+    <div class="stat-card">
+      <div class="stat-value human" id="stat-humans">—</div>
+      <div class="stat-label">Humans</div>
+    </div>
+    <div class="stat-divider"></div>
+    <div class="stat-card">
+      <div class="stat-value bot" id="stat-bots">—</div>
+      <div class="stat-label">Bots</div>
+    </div>
+    <div class="stat-divider"></div>
+    <div class="stat-card">
+      <div class="stat-value country" id="stat-countries">—</div>
+      <div class="stat-label">Countries</div>
+    </div>
+    <div class="stat-divider"></div>
+    <div class="stat-card">
+      <div class="stat-value heavy" id="stat-heavy">—</div>
+      <div class="stat-label">Heavy Users</div>
+    </div>
+    <div class="stat-divider"></div>
+    <div class="stat-card threshold-card" id="threshold-card" title="Click to adjust">
+      <div class="stat-value threshold" id="stat-threshold">—</div>
+      <div class="stat-label">Outlier Threshold <span class="threshold-edit-hint">&#9881;</span></div>
+
+      <!-- Popover -->
+      <div class="threshold-popover hidden" id="threshold-popover" onclick="event.stopPropagation()">
+        <div class="tpop-title">Adjust Outlier Threshold</div>
+        <label class="tpop-label">IQR Multiplier
+          <input id="tpop-iqr" class="tpop-input" type="number" step="0.1" min="0.1" value="1.5" />
+        </label>
+        <label class="tpop-label">Min Requests
+          <input id="tpop-min" class="tpop-input" type="number" step="1" min="1" value="10" />
+        </label>
+        <div class="tpop-hint">threshold = Q3 + multiplier &times; IQR, floored at min requests</div>
+        <button class="tpop-apply" id="tpop-apply">Apply</button>
+      </div>
+    </div>
+    <div class="stat-divider"></div>
+    <div class="stat-card threshold-card" id="tail-card" title="Click to adjust lines loaded">
+      <div class="stat-value threshold" id="stat-tail">—</div>
+      <div class="stat-label">Lines Loaded <span class="threshold-edit-hint">&#9881;</span></div>
+
+      <!-- Popover -->
+      <div class="threshold-popover hidden" id="tail-popover" onclick="event.stopPropagation()">
+        <div class="tpop-title">Change Lines Loaded</div>
+        <label class="tpop-label">Lines to load
+          <input id="tail-pop-input" class="tpop-input" type="number" step="1" min="1" />
+        </label>
+        <div class="tpop-hint">Reloads all in-memory entries from the last N lines of the log file.</div>
+        <button class="tpop-apply" id="tail-pop-apply">Apply</button>
+      </div>
+    </div>
+    <div class="stat-divider"></div>
+    <div class="stat-card threshold-card" id="reset-card" title="Click to configure auto-reset">
+      <div class="stat-value threshold" id="stat-reset">Off</div>
+      <div class="stat-label">Auto Reset <span class="threshold-edit-hint">&#9881;</span></div>
+
+      <!-- Popover -->
+      <div class="threshold-popover hidden" id="reset-popover" onclick="event.stopPropagation()">
+        <div class="tpop-title">Auto Reset Schedule</div>
+        <label class="tpop-label">Interval
+          <select id="reset-pop-select" class="tpop-input">
+            <option value="none">Off</option>
+            <option value="daily">Daily (midnight)</option>
+            <option value="monthly">Monthly (1st of month)</option>
+            <option value="yearly">Yearly (Jan 1st)</option>
+          </select>
+        </label>
+        <div class="tpop-hint" id="reset-next-hint">Next reset: —</div>
+        <button class="tpop-apply" id="reset-pop-apply">Apply</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Tab navigation ── -->
+  <nav class="tab-nav">
+    <div class="tab-nav-inner">
+      <button class="tab active" data-tab="all">All Traffic</button>
+      <button class="tab" data-tab="humans">Humans</button>
+      <button class="tab" data-tab="bots">Bots</button>
+      <button class="tab" data-tab="heavy">Heavy Users</button>
+      <button class="tab" data-tab="geo">Geo Stats</button>
+      <button class="tab" data-tab="ips">Requests per IP</button>
+      <button class="tab" data-tab="botrules">Bot Rules</button>
+    </div>
+  </nav>
+
+  <!-- ── Panels ── -->
+  <main class="main-content">
+
+    <!-- All -->
+    <div id="panel-all" class="panel active">
+      <div class="table-scroll">
+        <table class="data-table">
+          <thead><tr>
+            <th>Time</th><th>IP Address</th><th>Country</th>
+            <th>Method</th><th>Path</th><th>Status</th><th>Size</th>
+            <th>Type</th><th>User Agent</th>
+          </tr></thead>
+          <tbody id="tbody-all"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Humans -->
+    <div id="panel-humans" class="panel">
+      <div class="table-scroll">
+        <table class="data-table">
+          <thead><tr>
+            <th>Time</th><th>IP Address</th><th>Country</th>
+            <th>Method</th><th>Path</th><th>Status</th><th>Size</th>
+            <th>User Agent</th>
+          </tr></thead>
+          <tbody id="tbody-humans"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Bots -->
+    <div id="panel-bots" class="panel">
+      <div class="table-scroll">
+        <table class="data-table">
+          <thead><tr>
+            <th>Time</th><th>IP Address</th><th>Country</th>
+            <th>Method</th><th>Path</th><th>Status</th><th>Size</th>
+            <th>User Agent</th>
+          </tr></thead>
+          <tbody id="tbody-bots"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Heavy Users -->
+    <div id="panel-heavy" class="panel">
+      <div class="panel-header">
+        <p class="panel-description">
+          IPs whose request count exceeds the IQR outlier threshold.
+          Threshold: <strong id="heavy-threshold-label">—</strong> requests.
+        </p>
+      </div>
+      <div class="table-scroll">
+        <table class="data-table">
+          <thead><tr>
+            <th>IP Address</th><th>Country</th>
+            <th>Total Requests</th><th>Threshold</th><th>Classification</th>
+          </tr></thead>
+          <tbody id="tbody-heavy"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Geo Stats -->
+    <div id="panel-geo" class="panel">
+      <div class="table-scroll">
+        <table class="data-table">
+          <thead><tr>
+            <th>Country</th><th>Code</th>
+            <th>Total</th><th>Humans</th><th>Bots</th><th>Share</th>
+          </tr></thead>
+          <tbody id="tbody-geo"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Requests per IP -->
+    <div id="panel-ips" class="panel">
+      <div class="panel-header">
+        <p class="panel-description">
+          All IPs sorted by total request count. Unique IPs: <strong id="ip-unique-label">—</strong>.
+          Outlier threshold: <strong id="ip-threshold-label">—</strong> requests.
+        </p>
+      </div>
+      <div class="table-scroll">
+        <table class="data-table">
+          <thead><tr>
+            <th>#</th><th>IP Address</th><th>Country</th>
+            <th>Total</th><th>Humans</th><th>Bots</th><th>Share</th><th>Classification</th>
+          </tr></thead>
+          <tbody id="tbody-ips"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Bot Rules -->
+    <div id="panel-botrules" class="panel">
+
+      <!-- Info bar -->
+      <div class="br-infobar">
+        <div class="br-infobar-left">
+          <span>ua-parser library:</span>
+          <span id="br-lib-badge" class="br-badge">—</span>
+          <span class="footer-sep">·</span>
+          <span>Total bots: <strong id="br-total-bots">—</strong></span>
+        </div>
+        <button class="br-add-btn" id="br-add-btn">+ Add Custom Rule</button>
+      </div>
+
+      <!-- Rules table -->
+      <div class="table-scroll br-table-scroll">
+        <table class="data-table br-table">
+          <thead><tr>
+            <th style="width:60px;text-align:center">Active</th>
+            <th style="width:32px">#</th>
+            <th style="width:200px">Rule Name</th>
+            <th>Description</th>
+            <th style="width:320px">Regex Pattern</th>
+            <th style="width:90px">Hits</th>
+            <th style="width:70px">Share</th>
+            <th style="width:90px">Actions</th>
+          </tr></thead>
+          <tbody id="tbody-botrules"></tbody>
+        </table>
+      </div>
+
+      <!-- Add rule form (hidden by default) -->
+      <div id="br-add-form" class="br-add-form hidden">
+        <h4 class="br-form-title">Add Custom Rule</h4>
+        <div class="br-form-row">
+          <label class="br-label">Name</label>
+          <input id="br-new-name" class="br-input" placeholder="My Custom Rule" />
+        </div>
+        <div class="br-form-row">
+          <label class="br-label">Description</label>
+          <input id="br-new-desc" class="br-input" placeholder="What this rule detects" />
+        </div>
+        <div class="br-form-row">
+          <label class="br-label">Regex Pattern</label>
+          <input id="br-new-pattern" class="br-input br-mono" placeholder="mybot|mycrawler|myscraper" />
+        </div>
+        <div class="br-form-actions">
+          <button class="br-save-btn" id="br-add-save">Save Rule</button>
+          <button class="br-cancel-btn" id="br-add-cancel">Cancel</button>
+        </div>
+      </div>
+
+      <!-- UA Tester -->
+      <div class="br-tester">
+        <h4 class="br-tester-title">Test a User-Agent String</h4>
+        <div class="br-tester-row">
+          <textarea id="ua-test-input" class="ua-input" rows="2"
+            placeholder="Paste a User-Agent string here, e.g. Mozilla/5.0 (compatible; Googlebot/2.1; ...)"></textarea>
+          <button class="test-btn" id="ua-test-btn">Test</button>
+        </div>
+        <div id="ua-test-result" class="ua-result hidden"></div>
+      </div>
+
+    </div>
+
+  </main>
+
+  <!-- ── Footer ── -->
+  <footer>
+    <div class="footer-inner">
+      <span>Arquivo.pt Live Log Analysis</span>
+      <span class="footer-sep">·</span>
+      <span>Ignore: localhost &amp; private IPs</span>
+    </div>
+  </footer>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

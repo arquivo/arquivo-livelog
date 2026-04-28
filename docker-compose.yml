@@ -1,0 +1,41 @@
+version: "3.9"
+
+services:
+  apachelivelogs:
+    build: .
+    image: apachelivelogs:latest
+    container_name: apachelivelogs
+    restart: unless-stopped
+    ports:
+      - "${APP_PORT:-8000}:8000"
+    volumes:
+      # Mount your Apache log directory here.
+      # Default: uses /tmp/demo-logs inside the container (demo mode).
+      - ${LOG_DIR:-/tmp/demo-logs}:/logs:ro
+    environment:
+      LOG_FILE: /logs/${LOG_FILENAME:-access.log}
+      TAIL_LINES: ${TAIL_LINES:-50000}
+      HEAVY_USAGE_IQR_MULTIPLIER: ${HEAVY_USAGE_IQR_MULTIPLIER:-1.5}
+      HEAVY_USAGE_MIN_REQUESTS: ${HEAVY_USAGE_MIN_REQUESTS:-10}
+      REFRESH_INTERVAL: ${REFRESH_INTERVAL:-2.0}
+      MAX_DISPLAY_ENTRIES: ${MAX_DISPLAY_ENTRIES:-10000}
+      IGNORE_IPS: ${IGNORE_IPS:-127.0.0.1,::1,0:0:0:0:0:0:0:1}
+      PORT: 8000
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/stats"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  # Optional: run BDD tests
+  bdd-tests:
+    build: .
+    image: apachelivelogs:latest
+    profiles: ["test"]
+    command: >
+      sh -c "pip install --no-cache-dir behave &&
+             python tests/generate_test_log.py /tmp/test.log 2000 &&
+             LOG_FILE=/tmp/test.log behave --no-capture features/"
+    environment:
+      LOG_FILE: /tmp/test.log
