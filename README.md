@@ -52,6 +52,25 @@ The container auto-generates a synthetic log when `LOG_FILE` does not exist or i
 LOG_DIR=/var/log/apache2 LOG_FILENAME=access.log docker compose up
 ```
 
+### Tailing logs from multiple remote servers
+
+`arquivo-livelog` only reads a single local file, so to watch several servers at once, merge
+their logs locally first with [`scripts/tail_remote_logs.sh`](scripts/tail_remote_logs.sh) — it
+opens an `ssh tail -f` per host and appends everything into one file (respawning the tails at
+midnight, since the remote files are date-suffixed):
+
+```bash
+./scripts/tail_remote_logs.sh --server server1.arquivo.pt,server2.arquivo.pt --out /tmp/arquivo-livelog-merged.log
+```
+
+Then, in another terminal, point the app at the merged file:
+
+```bash
+LOG_DIR=/tmp/ LOG_FILENAME=arquivo-livelog-merged.log docker compose up --build
+```
+
+Open http://localhost:8000/
+
 ---
 
 ## Configuration
