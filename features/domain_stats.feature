@@ -7,9 +7,17 @@ Feature: Requests per Domain
     When I extract the referring domain from "https://www.Google.com/search?q=x"
     Then the extracted domain should be "google.com"
 
-  Scenario: Requests without a referer are reported as direct
+  Scenario: Requests without a referer are labelled as such
     When I extract the referring domain from "-"
-    Then the extracted domain should be "(direct)"
+    Then the extracted domain should be "(no referer)"
+
+  Scenario: A mobile app referer is kept as its own source, not folded into (no referer)
+    When I extract the referring domain from "android-app://com.google.android.gm"
+    Then the extracted domain should be "android-app://com.google.android.gm"
+
+  Scenario: An unusable referer still falls back to (no referer)
+    When I extract the referring domain from "garbage"
+    Then the extracted domain should be "(no referer)"
 
   Scenario: A referer port is not part of the domain
     When I extract the referring domain from "http://example.com:8080/page"
@@ -32,9 +40,9 @@ Feature: Requests per Domain
       | domain      | count |
       | google.com  | 120   |
       | twitter.com | 45    |
-      | (direct)    | 300   |
+      | (no referer) | 300   |
     When I aggregate domain statistics for source "referer"
-    Then the top domain should be "(direct)" with 300 requests
+    Then the top domain should be "(no referer)" with 300 requests
     And the domain report should contain 3 unique domains
 
   Scenario: Bot and error counts are reported per domain

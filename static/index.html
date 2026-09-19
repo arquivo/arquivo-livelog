@@ -272,6 +272,9 @@
             <button class="seg active" data-source="referer">Referrer domain</button>
             <button class="seg" data-source="url">Archived URL domain</button>
           </div>
+          <label class="chk-inline" title="Requests rejected by an access rule carry no Referer, so including them buries every real referring site under one huge (no referer) row.">
+            <input type="checkbox" id="domain-exclude-blocked" checked /> Exclude blocked requests
+          </label>
           <input id="domain-filter" class="url-filter" type="search" placeholder="Filter domains&hellip;" />
         </div>
       </div>
@@ -387,7 +390,6 @@
         <button class="block-mode-btn active" data-mode="ip">By IP (heavy users)</button>
         <button class="block-mode-btn"        data-mode="country">By Country</button>
         <button class="block-mode-btn"        data-mode="ua">By User-Agent</button>
-        <button class="block-mode-btn"        data-mode="signature">By Signature</button>
       </div>
 
       <div class="block-mode-doc" id="block-mode-doc"><!-- filled by JS per mode --></div>
@@ -409,30 +411,14 @@
             <span>Only countries with bots</span>
           </label>
           <span class="footer-sep ua-mode-only" style="display:none">·</span>
-          <label class="block-check-all ua-mode-only" style="display:none">
-            <input type="checkbox" id="block-ua-token" />
-            <span>Group by product token</span>
-          </label>
-          <span class="footer-sep ua-mode-only" style="display:none">·</span>
-          <label class="block-check-all ua-mode-only" style="display:none">
-            <input type="checkbox" id="block-ua-bots-only" />
-            <span>Only bot-classified</span>
+          <label class="block-check-all ua-mode-only" style="display:none"
+                 title="Narrow to clients sending no Referer on these paths. A real browser scatters across the site and arrives with referrers, so a near-100% share is the shape of a machine working through a list. Paths come from the server's SIGNATURE_PATHS setting.">
+            <input type="checkbox" id="block-ua-signature" />
+            <span>Only no-referer on <strong id="block-sig-paths-label">/noFrame, /wayback</strong></span>
           </label>
           <span class="footer-sep ua-mode-only" style="display:none">·</span>
           <label class="block-label ua-mode-only" style="display:none">Min requests
             <input type="number" id="block-ua-min" class="tpop-input block-ua-min" min="1" value="10" />
-          </label>
-          <span class="footer-sep sig-mode-only" style="display:none">·</span>
-          <label class="block-label sig-mode-only" style="display:none">Min signature share %
-            <input type="number" id="block-sig-share" class="tpop-input block-ua-min" min="0" max="100" value="90" />
-          </label>
-          <span class="footer-sep sig-mode-only" style="display:none">·</span>
-          <label class="block-label sig-mode-only" style="display:none">Min requests
-            <input type="number" id="block-sig-min" class="tpop-input block-ua-min" min="1" value="10" />
-          </label>
-          <span class="footer-sep sig-mode-only" style="display:none">·</span>
-          <label class="block-label sig-mode-only" style="display:none">Paths
-            <input type="text" id="block-sig-paths" class="tpop-input" style="width:180px" placeholder="/noFrame,/wayback" />
           </label>
           <span class="footer-sep">·</span>
           <span>Selected: <strong id="block-selected-count">0</strong></span>

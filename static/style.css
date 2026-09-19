@@ -467,6 +467,21 @@ tr.row-heavy:hover { background: #ffe4e4 !important; }
   font-family: 'SFMono-Regular', Consolas, monospace;
 }
 
+.chk-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--text-muted);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.data-table td.url-no-request {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
 /* ── Footer ── */
 footer {
   background: var(--navy);
@@ -796,13 +811,6 @@ tr.rule-disabled td:first-child { opacity: 1; }
   border-top: 3px solid var(--purple);
   padding-top: 5px;
 }
-.block-mode-btn[data-mode="signature"].active {
-  color: var(--green);
-  border-color: var(--border-lt) var(--border-lt) var(--white);
-  border-top: 3px solid var(--green);
-  padding-top: 5px;
-}
-
 /* ── Block Suggestions: documentation ── */
 .block-doc-details {
   margin-top: 8px;

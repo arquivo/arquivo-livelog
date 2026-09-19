@@ -11,6 +11,10 @@ COMBINED_LOG_RE = re.compile(
     r' (?P<status>\d+)'
     r' (?P<size>\S+)'
     r'(?: "(?P<referer>[^"]*)" "(?P<user_agent>[^"]*)")?'
+    # %D (microseconds) and the ARQUIVO_BLOCK env var, both appended by the
+    # arquivo vhost's combinedreqtime format. Optional: other formats omit them.
+    r'(?:\s+(?P<duration>\d+))?'
+    r'(?:\s+(?P<block_reason>\S+))?'
 )
 
 
@@ -28,6 +32,10 @@ class LogEntry:
     country_code: str = "??"
     country_name: str = "Unknown"
     is_heavy_user: bool = False
+    duration_us: int = 0
+    # Which access rule produced a 403, from %{ARQUIVO_BLOCK}e. Empty when the
+    # request was served, or when the log format does not carry the field.
+    block_reason: str = ""
 
     def to_dict(self) -> dict:
         return {
@@ -43,6 +51,8 @@ class LogEntry:
             "country_code": self.country_code,
             "country_name": self.country_name,
             "is_heavy_user": self.is_heavy_user,
+            "duration_us": self.duration_us,
+            "block_reason": self.block_reason,
         }
 
 
@@ -76,6 +86,8 @@ def parse_line(line: str) -> Optional[LogEntry]:
         path=path,
         status=int(m.group("status")),
         size=size,
+        duration_us=int(m.group("duration") or 0),
+        block_reason=(lambda r: "" if not r or r == "-" else r)(m.group("block_reason")),
         referer=m.group("referer") or "",
         user_agent=m.group("user_agent") or "",
     )

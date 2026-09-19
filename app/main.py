@@ -87,8 +87,15 @@ class Store:
         self.ua_noref_counter = Counter()
         self.ua_sig_counter = Counter()
         self.ua_sig_ips = {}
+        # Two scopes per source: "all" is every request, "unblocked" omits those
+        # an access rule rejected. The referer panel defaults to "unblocked" —
+        # with 90%+ of traffic blocked and referer-less, "all" is one enormous
+        # (no referer) bucket that hides every real referring site.
         self.domain_counters = {
-            src: {"total": Counter(), "bots": Counter(), "errors": Counter()}
+            src: {
+                scope: {"total": Counter(), "bots": Counter(), "errors": Counter()}
+                for scope in ("all", "unblocked")
+            }
             for src in ("referer", "url")
         }
         self.rule_hit_counter = Counter()
@@ -141,12 +148,14 @@ class Store:
         ):
             if not key:
                 continue
-            counters = self.domain_counters[source]
-            counters["total"][key] += 1
-            if entry.is_bot:
-                counters["bots"][key] += 1
-            if entry.status >= 400:
-                counters["errors"][key] += 1
+            scopes = ["all"] if entry.block_reason else ["all", "unblocked"]
+            for scope in scopes:
+                counters = self.domain_counters[source][scope]
+                counters["total"][key] += 1
+                if entry.is_bot:
+                    counters["bots"][key] += 1
+                if entry.status >= 400:
+                    counters["errors"][key] += 1
 
     def stats(self) -> dict:
         return {
@@ -178,9 +187,10 @@ class Store:
         self.ua_noref_counter.clear()
         self.ua_sig_counter.clear()
         self.ua_sig_ips.clear()
-        for counters in self.domain_counters.values():
-            for c in counters.values():
-                c.clear()
+        for scopes in self.domain_counters.values():
+            for counters in scopes.values():
+                for c in counters.values():
+                    c.clear()
         self.rule_hit_counter.clear()
         self.total = 0
         self.bots = 0
@@ -547,10 +557,12 @@ async def api_domain_stats(
     source: str = "referer",
     q: str = "",
     limit: int = 500,
+    exclude_blocked: bool = False,
 ):
     src = "url" if source == "url" else "referer"
-    counters = store.domain_counters[src]
-    return aggregate_domains(
+    scope = "unblocked" if exclude_blocked else "all"
+    counters = store.domain_counters[src][scope]
+    report = aggregate_domains(
         counters["total"],
         counters["bots"],
         counters["errors"],
@@ -558,6 +570,8 @@ async def api_domain_stats(
         query=q,
         limit=limit,
     )
+    report["scope"] = scope
+    return report
 
 
 @app.get("/api/geo-stats")

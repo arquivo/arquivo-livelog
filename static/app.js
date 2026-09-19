@@ -312,9 +312,15 @@ async function fetchUrlStats() {
       const pct  = Math.max(4, Math.round((u.total / maxTotal) * 120));
       const url  = escapeHtml(u.url);
       const errCls = u.errors > 0 ? 'color:var(--red)' : 'color:var(--text-muted)';
+      // Apache logs %r as "-" when a connection is opened but no request line
+      // ever arrives, so the parser has no path to record. These are timeouts
+      // (virtually all 408), not a URL anyone asked for.
+      const urlCell = u.url === '-'
+        ? `<td class="url-cell url-no-request" title="Connection opened but no request line was ever sent, so Apache logged no URL. Almost always a 408 timeout \u2014 these are connection attempts, not requests for a page.">(no request \u2014 connection timeout)</td>`
+        : `<td class="url-cell" title="${url}">${url}</td>`;
       return `<tr>
         <td style="color:var(--text-muted);width:40px">${i + 1}</td>
-        <td class="url-cell" title="${url}">${url}</td>
+        ${urlCell}
         <td>
           <div class="geo-bar-wrap">
             <div class="geo-bar" style="width:${pct}px"></div>
@@ -370,6 +376,9 @@ async function fetchDomainStats() {
   try {
     const params = new URLSearchParams({ source: domainSource });
     if (domainFilter) params.set('q', domainFilter);
+    if (document.getElementById('domain-exclude-blocked')?.checked) {
+      params.set('exclude_blocked', 'true');
+    }
     const res  = await fetch(`/api/domain-stats?${params}`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
@@ -423,6 +432,8 @@ async function fetchDomainStats() {
 }
 
 (function setupDomainControls() {
+  document.getElementById('domain-exclude-blocked')
+    ?.addEventListener('change', fetchDomainStats);
   const filterInput = document.getElementById('domain-filter');
   if (filterInput) {
     filterInput.addEventListener('input', () => {
@@ -844,7 +855,6 @@ let _blockMode    = 'ip';        // 'ip' | 'country' | 'ua'
 let _blockUsers   = [];          // raw heavy-users payload
 let _blockCountries = [];        // raw geo-stats payload
 let _blockUAs     = [];          // raw ua-stats payload
-let _blockSigs    = [];          // raw ua-stats payload, signature-filtered
 let _sigPaths     = ['/noFrame', '/wayback'];  // server-side signature paths
 let _blockSelected = new Set();  // set of IP/CIDR, country-code or UA strings
 
@@ -905,17 +915,17 @@ function reEscape(str) {
   return String(str).replace(/[.*+?^${}()|[\]\\\/-]/g, '\\$&');
 }
 
-// Token mode matches a substring (survives version bumps); full mode is exact.
-function uaTokenMode() {
-  return document.getElementById('block-ua-token')?.checked !== false;
+// Signature is a narrowing of By User-Agent, not a separate dimension: the same
+// UA rows, restricted to requests that carried no Referer on the signature paths.
+function sigOnly() {
+  return document.getElementById('block-ua-signature')?.checked === true;
 }
 
 function populateFormatSelect() {
   const sel = document.getElementById('block-format');
   if (!sel) return;
-  const list = _blockMode === 'country'   ? COUNTRY_FORMATS
-             : _blockMode === 'ua'        ? UA_FORMATS
-             : _blockMode === 'signature' ? SIGNATURE_FORMATS
+  const list = _blockMode === 'country' ? COUNTRY_FORMATS
+             : _blockMode === 'ua'      ? (sigOnly() ? SIGNATURE_FORMATS : UA_FORMATS)
              : IP_FORMATS;
   sel.innerHTML = list.map(([v, l]) => `<option value="${v}">${l}</option>`).join('');
 }
@@ -926,32 +936,23 @@ async function fetchBlockSuggestions({ preserveSelection = false } = {}) {
       const res  = await fetch('/api/geo-stats');
       const data = await res.json();
       _blockCountries = (data.countries || []).filter(c => c.code && c.code !== '??');
-    } else if (_blockMode === 'signature') {
-      const params = new URLSearchParams({
-        group:                'full',
-        signature_only:       'true',
-        min_signature_share:  String(Math.min(100, Math.max(0, parseFloat(document.getElementById('block-sig-share')?.value) || 0))),
-        min_requests:         String(Math.max(1, parseInt(document.getElementById('block-sig-min')?.value, 10) || 1)),
-        limit:                '500',
-      });
-      const res  = await fetch(`/api/ua-stats?${params}`);
-      const data = await res.json();
-      _blockSigs = data.user_agents || [];
-      if (Array.isArray(data.signature_paths) && data.signature_paths.length) {
-        _sigPaths = data.signature_paths;
-        const box = document.getElementById('block-sig-paths');
-        if (box && !box.value) box.value = _sigPaths.join(',');
-      }
     } else if (_blockMode === 'ua') {
+      // Always 'full': token grouping collapses every browser-shaped string into
+      // one "Mozilla" row, which is useless for spotting a forged UA.
       const params = new URLSearchParams({
-        group:        uaTokenMode() ? 'token' : 'full',
-        bots_only:    document.getElementById('block-ua-bots-only')?.checked ? 'true' : 'false',
+        group:        'full',
         min_requests: String(Math.max(1, parseInt(document.getElementById('block-ua-min')?.value, 10) || 1)),
         limit:        '500',
       });
+      if (sigOnly()) params.set('signature_only', 'true');
       const res  = await fetch(`/api/ua-stats?${params}`);
       const data = await res.json();
       _blockUAs = data.user_agents || [];
+      if (Array.isArray(data.signature_paths) && data.signature_paths.length) {
+        _sigPaths = data.signature_paths;
+        const lbl = document.getElementById('block-sig-paths-label');
+        if (lbl) lbl.textContent = _sigPaths.join(', ');
+      }
     } else {
       const res  = await fetch('/api/heavy-users');
       const data = await res.json();
@@ -991,33 +992,22 @@ function currentBlockRows() {
     return rows;
   }
 
-  if (_blockMode === 'signature') {
-    return _blockSigs.map(u => ({
-      key: u.user_agent,
-      label: u.user_agent,
-      sample: u.sample || u.user_agent,
-      count: u.total,
-      signature: u.signature,
-      signature_share: u.signature_share,
-      signature_ips: u.signature_ips,
-      no_referer: u.no_referer,
-      is_bot: u.is_bot,
-      is_signature: true,
-    }));
-  }
-
   if (_blockMode === 'ua') {
+    const sig = sigOnly();
     return _blockUAs.map(u => ({
       key: u.user_agent,
       label: u.user_agent,
       sample: u.sample || u.user_agent,
       token: u.token || u.user_agent,
       count: u.total,
-      unique_ips: u.unique_ips,
+      unique_ips: sig ? (u.signature_ips ?? u.unique_ips) : u.unique_ips,
       ips_capped: u.ips_capped,
+      no_referer: sig ? u.signature : u.no_referer,
+      signature_share: u.signature_share,
       is_bot: u.is_bot,
       rule_name: u.rule_name,
       is_ua: true,
+      is_signature: sig,
     }));
   }
 
@@ -1093,27 +1083,18 @@ function renderBlockTableHead() {
       <th>Total Requests</th>
       <th>Bots</th>
     </tr>`;
-  } else if (_blockMode === 'signature') {
-    thead.innerHTML = `<tr>
-      <th style="width:40px;text-align:center">
-        <input type="checkbox" id="block-head-check" checked />
-      </th>
-      <th>User-Agent</th>
-      <th style="width:100px">Requests</th>
-      <th style="width:110px" title="Requests with no Referer on a signature path">Signature</th>
-      <th style="width:90px" title="Signature requests as a share of this UA's traffic">Share</th>
-      <th style="width:90px">Unique IPs</th>
-    </tr>`;
   } else if (_blockMode === 'ua') {
+    const sig = sigOnly();
     thead.innerHTML = `<tr>
       <th style="width:40px;text-align:center">
         <input type="checkbox" id="block-head-check" checked />
       </th>
       <th>User-Agent</th>
       <th style="width:100px">Requests</th>
-      <th style="width:110px" title="Requests that arrived with no Referer">No Referer</th>
+      <th style="width:110px" title="${sig ? 'Requests with no Referer on the signature paths' : 'Requests that arrived with no Referer'}">No Referer</th>
+      ${sig ? '<th style="width:90px" title="No-referer requests as a share of this UA\'s traffic">Share</th>' : ''}
       <th style="width:90px">Unique IPs</th>
-      <th style="width:150px">Detected as</th>
+      ${sig ? '' : '<th style="width:150px">Detected as</th>'}
     </tr>`;
   } else {
     thead.innerHTML = `<tr>
@@ -1148,10 +1129,10 @@ function renderBlockTable() {
   if (!rows.length) {
     const msg = _blockMode === 'country'
       ? 'No country data yet — wait for traffic to be ingested.'
-      : _blockMode === 'signature'
-      ? 'No User-Agent matches the signature — lower "Min signature share %" or "Min requests", or widen the paths.'
       : _blockMode === 'ua'
-      ? 'No User-Agent matches the current filters — lower "Min requests" or untick "Only bot-classified".'
+      ? (sigOnly()
+          ? 'No User-Agent sent requests without a Referer on those paths — untick the filter or lower "Min requests".'
+          : 'No User-Agent matches — lower "Min requests".')
       : 'No heavy users detected — nothing to suggest blocking.';
     tbody.innerHTML = `<tr><td colspan="6" class="empty-state">${msg}</td></tr>`;
     document.getElementById('block-selected-count').textContent = '0';
@@ -1171,25 +1152,13 @@ function renderBlockTable() {
         <td style="color:var(--orange)">${r.bots?.toLocaleString() ?? '0'}</td>
       </tr>`;
     }
-    if (r.is_signature) {
+    if (r.is_ua) {
+      const ips   = r.unique_ips?.toLocaleString() ?? '—';
       const share = (r.signature_share ?? 0).toFixed(1);
       const hot   = (r.signature_share ?? 0) >= 90 ? ' style="color:var(--orange);font-weight:600"' : '';
-      return `<tr>
-        <td style="text-align:center">
-          <input type="checkbox" data-key="${escapeHtml(r.key)}" ${checked} class="block-row-check" />
-        </td>
-        <td class="ua-key-cell" title="${escapeHtml(r.sample)}">${escapeHtml(r.label)}</td>
-        <td class="count-cell">${r.count?.toLocaleString() ?? '—'}</td>
-        <td class="count-cell">${r.signature?.toLocaleString() ?? '—'}</td>
-        <td class="count-cell"${hot}>${share}%</td>
-        <td class="count-cell">${r.signature_ips?.toLocaleString() ?? '—'}</td>
-      </tr>`;
-    }
-    if (r.is_ua) {
       const detected = r.is_bot
         ? `<span class="type-badge type-bot">Bot</span> <span class="ua-rule-name">${escapeHtml(r.rule_name || '')}</span>`
         : '<span class="type-badge type-human">Human</span>';
-      const ips = r.unique_ips?.toLocaleString() ?? '—';
       return `<tr>
         <td style="text-align:center">
           <input type="checkbox" data-key="${escapeHtml(r.key)}" ${checked} class="block-row-check" />
@@ -1197,8 +1166,9 @@ function renderBlockTable() {
         <td class="ua-key-cell" title="${escapeHtml(r.sample)}">${escapeHtml(r.label)}</td>
         <td class="count-cell">${r.count?.toLocaleString() ?? '—'}</td>
         <td class="count-cell">${r.no_referer?.toLocaleString() ?? '—'}</td>
+        ${r.is_signature ? `<td class="count-cell"${hot}>${share}%</td>` : ''}
         <td class="count-cell">${ips}${r.ips_capped ? '+' : ''}</td>
-        <td>${detected}</td>
+        ${r.is_signature ? '' : `<td>${detected}</td>`}
       </tr>`;
     }
     const badge = r.is_bot
@@ -1307,19 +1277,13 @@ const MODE_DOCS = {
     match: 'Every request from a country, by GeoIP lookup on the source address. The 50 busiest countries in the window.',
     use:   'Traffic is concentrated somewhere you have no audience and you accept losing every visitor from there. Fast to apply and needs no per-address maintenance.',
     risk:  'The bluntest dimension here. It blocks your readers along with the abuse, it cannot distinguish the two, and country entries tend to accumulate and never get removed. GeoIP is roughly 99.8% accurate at country level, so a small number of visitors are misplaced entirely. Reach for this when a narrower dimension genuinely will not separate the traffic.',
-    cols:  '<strong>Total Requests</strong> is every request from that country; <strong>Bots</strong> is the share the classifier recognised as automated. A high total with near-zero bots means the traffic looks like ordinary browsers — which may mean it is, or that it is disguised. Compare against <em>By Signature</em> before deciding.',
+    cols:  '<strong>Total Requests</strong> is every request from that country; <strong>Bots</strong> is the share the classifier recognised as automated. A high total with near-zero bots means the traffic looks like ordinary browsers — which may mean it is, or that it is disguised. Compare against <em>By User-Agent</em> with <em>Only no-referer</em> ticked before deciding.',
   },
   ua: {
-    match: 'Clients grouped by the User-Agent header they send — either the full string, or collapsed to a product token so every version of one client rolls into a single row.',
-    use:   'A client identifies itself and is noisy: an SEO crawler, a scraping framework, an AI training bot, a misconfigured integration.',
-    risk:  'The User-Agent is self-reported and trivially forged. This dimension works on clients honest enough to name themselves, and misses entirely any scraper sending a real browser string — those are indistinguishable here from your actual visitors. <em>Only bot-classified</em> narrows to strings the detector recognises, which by definition excludes every forged browser UA; leave it unticked when hunting something that is hiding. If a browser UA dominates this table, that is the case for <em>By Signature</em>.',
-    cols:  '<strong>Requests</strong> is the total for that string. <strong>No Referer</strong> counts those that arrived with no referring page — the single most useful column here, because a forged browser UA with a near-total no-referer count is not a browser. <strong>Unique IPs</strong> with a <code>+</code> means the count is a lower bound.',
-  },
-  signature: {
-    match: 'A conjunction, not one attribute: a browser-like User-Agent <em>and</em> no Referer header <em>and</em> a request path under the configured prefixes. All three must hold.',
-    use:   'Traffic that looks like an ordinary browser but behaves like a scraper. This is the dimension that catches a pool forging real Chrome strings across many addresses and countries — where blocking by IP, country or UA each fail, for different reasons.',
-    risk:  'Each condition alone describes real visitors, so the precision comes entirely from requiring all three. The genuine false positive is someone opening one of those paths directly — from a bookmark, an emailed link or a citation in a PDF — who sends no Referer. Narrow the paths to the expensive endpoints rather than the whole site, and keep the share threshold high.',
-    cols:  '<strong>Signature</strong> is how many of that client\'s requests met all three conditions; <strong>Share</strong> is that as a percentage of everything it sent. A real browser scatters across the site and arrives with referrers, so its share stays low. A share at or near 100% means every single request fitted the pattern, which is the shape of a machine working through a list.',
+    match: 'Clients grouped by the exact User-Agent string they send. Tick <em>Only no-referer</em> to narrow to the ones that also sent no Referer on the signature paths — a conjunction, and a far sharper rule.',
+    use:   'Unticked: a client names itself and is noisy — an SEO crawler, a scraping framework, an AI training bot. Ticked: traffic that looks like an ordinary browser but behaves like a scraper, which is what catches a pool forging real Chrome strings across many addresses.',
+    risk:  'The User-Agent is self-reported and trivially forged, so on its own this only works on clients honest enough to name themselves. Ticking the filter fixes that, at the cost of one real false positive: someone opening those paths from a bookmark, an emailed link or a PDF citation sends no Referer either.',
+    cols:  '<strong>No Referer</strong> is the column that matters — a browser-shaped UA with a near-total count is not a browser. With the filter on it counts only the signature paths and <strong>Share</strong> appears: a real browser scatters and arrives with referrers, so its share stays low; at or near 100% you are looking at a machine working through a list. <code>+</code> on Unique IPs means a lower bound.',
   },
 };
 
@@ -1334,23 +1298,20 @@ function renderModeDoc() {
     <div class="bmd-row"><span class="bmd-label">Columns</span><span class="bmd-text">${d.cols}</span></div>`;
 }
 
-// Paths for the signature rule: whatever is in the box, else the server's list.
+// Paths for the signature rule, from the server's SIGNATURE_PATHS setting.
 function sigPaths() {
-  const raw = (document.getElementById('block-sig-paths')?.value || '').trim();
-  const list = raw ? raw.split(',').map(p => p.trim()).filter(Boolean) : _sigPaths;
-  return list.length ? list : ['/noFrame', '/wayback'];
+  return _sigPaths.length ? _sigPaths : ['/noFrame', '/wayback'];
 }
 
 function generateBlockCommands(targets, format) {
   if (!targets.length) {
-    if (_blockMode === 'country')   return 'No countries selected.';
-    if (_blockMode === 'signature') return 'No signatures selected.';
-    if (_blockMode === 'ua')        return 'No User-Agents selected.';
+    if (_blockMode === 'country') return 'No countries selected.';
+    if (_blockMode === 'ua')      return 'No User-Agents selected.';
     return 'No IPs selected.';
   }
 
   // ── Signature generators: UA + no Referer + path, as one conjunction ──
-  if (_blockMode === 'signature') {
+  if (_blockMode === 'ua' && sigOnly()) {
     const uas   = targets.map(t => t.key);
     const paths = sigPaths();
     const uaAlt = uas.map(reEscape).join('|');
@@ -1423,9 +1384,11 @@ function generateBlockCommands(targets, format) {
   if (_blockMode === 'ua') {
     const uas     = targets.map(t => t.key);
     const samples = targets.map(t => t.sample || t.key);
-    const token   = uaTokenMode();
-    // In token mode a substring match is intended, so anchor nothing.
-    const rx      = uas.map(u => token ? reEscape(u) : `^${reEscape(u)}$`);
+    // The tab always groups by the full UA string now, so rules match it
+    // exactly — anchored — rather than as a substring. (robots-txt is the one
+    // exception below: crawlers match their product token, not the whole string.)
+    const token   = false;
+    const rx      = uas.map(u => `^${reEscape(u)}$`);
 
     switch (format) {
       case 'apache-ua': {
@@ -1741,12 +1704,18 @@ function renderBlockOutput() {
         el.style.display = mode === 'country' ? '' : 'none');
       document.querySelectorAll('.ua-mode-only').forEach(el =>
         el.style.display = mode === 'ua' ? '' : 'none');
-      document.querySelectorAll('.sig-mode-only').forEach(el =>
-        el.style.display = mode === 'signature' ? '' : 'none');
       renderModeDoc();
       populateFormatSelect();
       fetchBlockSuggestions();
     });
+  });
+
+  // Signature is a narrowing of this tab: it changes the columns, the usable
+  // output formats and the doc text, so all three refresh with the data.
+  document.getElementById('block-ua-signature')?.addEventListener('change', () => {
+    renderModeDoc();
+    populateFormatSelect();
+    fetchBlockSuggestions();
   });
 
   // Toggle every visible row's checkbox in-place without rebuilding the table
@@ -1773,21 +1742,13 @@ function renderBlockOutput() {
     renderBlockTable();
   });
 
-  // UA and signature filters are applied server-side, so these need a refetch.
-  ['block-ua-token', 'block-ua-bots-only', 'block-ua-min',
-   'block-sig-share', 'block-sig-min'].forEach(id => {
-    document.getElementById(id)?.addEventListener('change', () => fetchBlockSuggestions());
-  });
-
-  // The paths box only shapes the generated rule text, not the query, so it
-  // re-renders the output without refetching.
-  document.getElementById('block-sig-paths')
-    ?.addEventListener('input', () => renderBlockOutput());
+  // Min requests is applied server-side, so it needs a refetch.
+  document.getElementById('block-ua-min')
+    ?.addEventListener('change', () => fetchBlockSuggestions());
 
   copy?.addEventListener('click', async () => {
     const text = document.getElementById('block-output')?.textContent || '';
-    const EMPTY = ['No IPs selected.', 'No countries selected.', 'No User-Agents selected.',
-                   'No signatures selected.'];
+    const EMPTY = ['No IPs selected.', 'No countries selected.', 'No User-Agents selected.'];
     if (!text || EMPTY.includes(text)) return;
     try {
       await navigator.clipboard.writeText(text);

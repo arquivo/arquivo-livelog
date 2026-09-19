@@ -107,3 +107,21 @@ def step_tail_file(context, n):
 def step_check_tail_count(context, n):
     got = len(context.tail_result)
     assert got == n, f"Expected {n} lines, got {got}"
+
+
+@then('the block reason should be "{expected}"')
+def step_check_block_reason(context, expected):
+    actual = context.result.block_reason
+    assert actual == expected, f"Expected block reason {expected!r}, got {actual!r}"
+
+
+@then("the block reason should be empty")
+def step_check_block_reason_empty(context):
+    actual = context.result.block_reason
+    assert actual == "", f"Expected empty block reason, got {actual!r}"
+
+
+@then("the request duration should be {us:d} microseconds")
+def step_check_duration(context, us):
+    actual = context.result.duration_us
+    assert actual == us, f"Expected {us} microseconds, got {actual}"

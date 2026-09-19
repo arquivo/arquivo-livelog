@@ -17,12 +17,21 @@ from functools import lru_cache
 
 from .url_stats import rank
 
-DIRECT = "(direct)"
+# A server log cannot distinguish "the visitor typed the URL" from "this client
+# never sends a Referer". Most traffic here is the latter, so the label states
+# what was observed rather than implying a human chose to arrive directly.
+NO_REFERER = "(no referer)"
+DIRECT = NO_REFERER          # backwards-compatible alias
 NONE = ""
 
 # Matches a scheme inside a path, tolerating Apache's collapsed double slash
 # (``http:/example.com``) which shows up in rewritten replay URLs.
 _SCHEME_RE = re.compile(r"https?:/{1,2}", re.IGNORECASE)
+
+# Any scheme followed by an authority, e.g. android-app://com.google.android.gm.
+# Mobile apps and other non-web clients send these; without this they fall
+# through _clean_host and get miscounted as having no referer at all.
+_ANY_SCHEME_RE = re.compile(r"^([a-z][a-z0-9+.-]*):/{2,3}", re.IGNORECASE)
 
 # A wayback-style timestamp segment, optionally followed by a modifier flag
 # such as ``if_``, ``im_`` or ``id_``.
@@ -51,11 +60,18 @@ def referer_domain(referer: str) -> str:
     """
     ref = (referer or "").strip()
     if not ref or ref == "-":
-        return DIRECT
+        return NO_REFERER
     m = _SCHEME_RE.match(ref)
-    rest = ref[m.end():] if m else ref
-    host = re.split(r"[/?#]", rest, 1)[0]
-    return _clean_host(host) or DIRECT
+    if m:
+        host = re.split(r"[/?#]", ref[m.end():], 1)[0]
+        return _clean_host(host) or NO_REFERER
+    other = _ANY_SCHEME_RE.match(ref)
+    if other:
+        scheme = other.group(1).lower()
+        authority = re.split(r"[/?#]", ref[other.end():], 1)[0].strip().lower()
+        return f"{scheme}://{authority}" if authority else f"{scheme}://"
+    host = re.split(r"[/?#]", ref, 1)[0]
+    return _clean_host(host) or NO_REFERER
 
 
 @lru_cache(maxsize=8192)

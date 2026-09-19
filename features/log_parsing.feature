@@ -81,3 +81,31 @@ Feature: Apache Log File Parsing
     Given a non-existent log file path
     When I tail the file requesting 100 lines
     Then I should receive exactly 0 lines
+
+  Scenario: The block reason is read from the trailing ARQUIVO_BLOCK field
+    Given the following log line:
+      """
+      1.2.3.4 - - [19/Sep/2026:13:20:57 +0100] "GET /noFrame/replay/x HTTP/1.1" 403 277 "-" "BotUA" 1331 signature
+      """
+    When I parse the log line
+    Then the status code should be 403
+    And the block reason should be "signature"
+    And the request duration should be 1331 microseconds
+
+  Scenario: A served request logs a dash for the block reason
+    Given the following log line:
+      """
+      1.2.3.4 - - [19/Sep/2026:13:20:57 +0100] "GET / HTTP/1.1" 200 512 "-" "Firefox/156.0" 4321 -
+      """
+    When I parse the log line
+    Then the status code should be 200
+    And the block reason should be empty
+
+  Scenario: A log format without the block field still parses
+    Given the following log line:
+      """
+      1.2.3.4 - - [19/Sep/2026:13:20:57 +0100] "GET / HTTP/1.1" 200 512 "-" "Firefox/156.0"
+      """
+    When I parse the log line
+    Then the status code should be 200
+    And the block reason should be empty
