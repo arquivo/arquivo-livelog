@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/style.css" />
+  <link rel="stylesheet" href="/static/style.css?v=url-domain-tabs" />
 </head>
 <body>
 
@@ -130,7 +130,10 @@
       <button class="tab" data-tab="heavy">Heavy Users</button>
       <button class="tab" data-tab="geo">Geo Stats</button>
       <button class="tab" data-tab="ips">Requests per IP</button>
+      <button class="tab" data-tab="urls">Requests per URL</button>
+      <button class="tab" data-tab="domains">Requests per Domain</button>
       <button class="tab" data-tab="botrules">Bot Rules</button>
+      <button class="tab" data-tab="block">Block Suggestions</button>
     </div>
   </nav>
 
@@ -230,6 +233,59 @@
       </div>
     </div>
 
+    <!-- Requests per URL -->
+    <div id="panel-urls" class="panel">
+      <div class="panel-header">
+        <p class="panel-description">
+          URLs sorted by request count. Unique URLs: <strong id="url-unique-label">&mdash;</strong>.
+          Showing <strong id="url-shown-label">&mdash;</strong> of <strong id="url-matched-label">&mdash;</strong> matching.
+        </p>
+        <div class="url-controls">
+          <input id="url-filter" class="url-filter" type="search" placeholder="Filter URLs&hellip;" />
+          <label class="url-toggle">
+            <input id="url-group-full" type="checkbox" />
+            <span>Keep query strings separate</span>
+          </label>
+        </div>
+      </div>
+      <div class="table-scroll">
+        <table class="data-table">
+          <thead><tr>
+            <th>#</th><th>URL</th>
+            <th>Total</th><th>Humans</th><th>Bots</th><th>Errors</th><th>Share</th>
+          </tr></thead>
+          <tbody id="tbody-urls"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Requests per Domain -->
+    <div id="panel-domains" class="panel">
+      <div class="panel-header">
+        <p class="panel-description">
+          <span id="domain-source-hint">Referring sites that sent traffic here.</span>
+          Unique domains: <strong id="domain-unique-label">&mdash;</strong>.
+          Showing <strong id="domain-shown-label">&mdash;</strong> of <strong id="domain-matched-label">&mdash;</strong> matching.
+        </p>
+        <div class="url-controls">
+          <div class="seg-control" id="domain-source">
+            <button class="seg active" data-source="referer">Referrer domain</button>
+            <button class="seg" data-source="url">Archived URL domain</button>
+          </div>
+          <input id="domain-filter" class="url-filter" type="search" placeholder="Filter domains&hellip;" />
+        </div>
+      </div>
+      <div class="table-scroll">
+        <table class="data-table">
+          <thead><tr>
+            <th>#</th><th>Domain</th>
+            <th>Total</th><th>Humans</th><th>Bots</th><th>Errors</th><th>Share</th>
+          </tr></thead>
+          <tbody id="tbody-domains"></tbody>
+        </table>
+      </div>
+    </div>
+
     <!-- Bot Rules -->
     <div id="panel-botrules" class="panel">
 
@@ -295,6 +351,133 @@
 
     </div>
 
+    <!-- Block Suggestions -->
+    <div id="panel-block" class="panel">
+      <div class="panel-header">
+        <p class="panel-description">
+          Turns observed traffic into ready-to-paste block rules. Pick the dimension that
+          best separates the traffic you want gone from the traffic you want to keep, review
+          the list, deselect false positives, then copy the rule for your firewall or web
+          server. <strong>These are suggestions — you apply them, at your own discretion.</strong>
+        </p>
+
+        <details class="block-doc-details">
+          <summary>How to use this</summary>
+          <ol class="block-doc-steps">
+            <li><strong>Pick a dimension.</strong> Each tab below matches traffic a different
+                way. The one to choose is whichever isolates the unwanted traffic with the
+                fewest real visitors caught alongside it — see the note under each tab.</li>
+            <li><strong>Tune the filters.</strong> The toolbar controls re-query the server,
+                so the table always reflects the window currently loaded, not a cached view.</li>
+            <li><strong>Review every row.</strong> Rows are selected by default. Untick
+                anything you recognise — a partner crawler, your own monitoring, a shared
+                university or corporate gateway.</li>
+            <li><strong>Choose a format and copy.</strong> The note under the output explains
+                what that format needs and where it goes. Apply it, then watch this dashboard
+                to confirm the traffic actually stopped.</li>
+          </ol>
+          <p class="block-doc-warn">
+            A block you cannot explain later is a block you will never dare remove. Note why
+            you added each one.
+          </p>
+        </details>
+      </div>
+
+      <div class="block-mode-bar">
+        <button class="block-mode-btn active" data-mode="ip">By IP (heavy users)</button>
+        <button class="block-mode-btn"        data-mode="country">By Country</button>
+        <button class="block-mode-btn"        data-mode="ua">By User-Agent</button>
+        <button class="block-mode-btn"        data-mode="signature">By Signature</button>
+      </div>
+
+      <div class="block-mode-doc" id="block-mode-doc"><!-- filled by JS per mode --></div>
+
+      <div class="block-toolbar">
+        <div class="block-toolbar-left">
+          <label class="block-check-all">
+            <input type="checkbox" id="block-select-all" checked />
+            <span>Select all</span>
+          </label>
+          <span class="footer-sep ip-mode-only">·</span>
+          <label class="block-check-all ip-mode-only">
+            <input type="checkbox" id="block-aggregate-cidr" />
+            <span>Aggregate /24 subnets (2+ IPs)</span>
+          </label>
+          <span class="footer-sep country-mode-only" style="display:none">·</span>
+          <label class="block-check-all country-mode-only" style="display:none">
+            <input type="checkbox" id="block-bots-only" />
+            <span>Only countries with bots</span>
+          </label>
+          <span class="footer-sep ua-mode-only" style="display:none">·</span>
+          <label class="block-check-all ua-mode-only" style="display:none">
+            <input type="checkbox" id="block-ua-token" />
+            <span>Group by product token</span>
+          </label>
+          <span class="footer-sep ua-mode-only" style="display:none">·</span>
+          <label class="block-check-all ua-mode-only" style="display:none">
+            <input type="checkbox" id="block-ua-bots-only" />
+            <span>Only bot-classified</span>
+          </label>
+          <span class="footer-sep ua-mode-only" style="display:none">·</span>
+          <label class="block-label ua-mode-only" style="display:none">Min requests
+            <input type="number" id="block-ua-min" class="tpop-input block-ua-min" min="1" value="10" />
+          </label>
+          <span class="footer-sep sig-mode-only" style="display:none">·</span>
+          <label class="block-label sig-mode-only" style="display:none">Min signature share %
+            <input type="number" id="block-sig-share" class="tpop-input block-ua-min" min="0" max="100" value="90" />
+          </label>
+          <span class="footer-sep sig-mode-only" style="display:none">·</span>
+          <label class="block-label sig-mode-only" style="display:none">Min requests
+            <input type="number" id="block-sig-min" class="tpop-input block-ua-min" min="1" value="10" />
+          </label>
+          <span class="footer-sep sig-mode-only" style="display:none">·</span>
+          <label class="block-label sig-mode-only" style="display:none">Paths
+            <input type="text" id="block-sig-paths" class="tpop-input" style="width:180px" placeholder="/noFrame,/wayback" />
+          </label>
+          <span class="footer-sep">·</span>
+          <span>Selected: <strong id="block-selected-count">0</strong></span>
+        </div>
+        <div class="block-toolbar-right">
+          <button class="block-refresh-btn" id="block-refresh-btn" title="Refetch heavy users / country / user-agent stats">
+            <span class="block-refresh-icon">&#x21bb;</span> Refresh
+          </button>
+          <label class="block-label">Format
+            <select id="block-format" class="tpop-input">
+              <!-- options populated by JS depending on mode -->
+            </select>
+          </label>
+        </div>
+      </div>
+
+      <div class="block-grid">
+        <div class="block-list-wrap">
+          <div class="table-scroll block-table-scroll">
+            <table class="data-table">
+              <thead id="thead-block"><tr>
+                <th style="width:40px;text-align:center">
+                  <input type="checkbox" id="block-head-check" checked />
+                </th>
+                <th>IP / Subnet</th>
+                <th>Country</th>
+                <th>Requests</th>
+                <th>Type</th>
+              </tr></thead>
+              <tbody id="tbody-block"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="block-output-wrap">
+          <div class="block-output-header">
+            <span class="block-output-title" id="block-output-title">Commands</span>
+            <button class="test-btn block-copy-btn" id="block-copy-btn">Copy</button>
+          </div>
+          <pre class="block-output" id="block-output">No IPs selected.</pre>
+          <div class="block-hint" id="block-hint"></div>
+        </div>
+      </div>
+    </div>
+
   </main>
 
   <!-- ── Footer ── -->
@@ -306,6 +489,6 @@
     </div>
   </footer>
 
-  <script src="/static/app.js"></script>
+  <script src="/static/app.js?v=block-ua"></script>
 </body>
 </html>

@@ -14,6 +14,7 @@ Real-time web dashboard for Apache access logs. Tails a log file, enriches each 
 - **Requests per IP** — sortable table of every IP with human/bot split and outlier flag
 - **Localhost ignored** — configurable list of IPs excluded from all views and statistics
 - **Auto reset** — schedule automatic stats/entry clearing on a daily, monthly, or yearly cycle; configurable live from the **Auto Reset** ⚙ card in the stats strip
+- **Signature detection** — finds scrapers that forge an ordinary browser User-Agent, by scoring each UA on the *conjunction* that gives them away: that UA arriving with **no Referer** on a configured set of expensive paths. A forged Chrome UA shows a signature share near 100%; the real Chrome sharing the same string does not
 - **Seven views** — All Traffic · Humans · Bots · Heavy Users · Geo Stats · Requests per IP · Bot Rules
 - **Arquivo.pt design** — institutional navy/white colour scheme, Roboto font
 

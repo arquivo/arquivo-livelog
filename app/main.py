@@ -21,6 +21,28 @@ from .config import config
 from .geo_ip import lookup as geo_lookup
 from .log_parser import LogEntry, parse_line, tail_file
 from .outlier_detector import compute_threshold, find_heavy_users
+from .domain_stats import (
+    aggregate as aggregate_domains, referer_domain, url_domain,
+)
+from .ua_stats import aggregate as aggregate_uas
+from .url_stats import aggregate as aggregate_urls
+
+
+# Upper bound on the distinct IPs remembered per User-Agent. Bounds memory on
+# long tails; counts at the cap are reported as "N+" by the dashboard.
+MAX_IPS_PER_UA = 2048
+
+
+def _has_referer(referer: str | None) -> bool:
+    """Apache logs a missing Referer as "-"; treat that and empty as absent."""
+    r = (referer or "").strip()
+    return bool(r) and r != "-"
+
+
+def _matches_signature_path(path: str | None) -> bool:
+    """True when the request path starts with one of config.signature_paths."""
+    p = path or ""
+    return any(p.startswith(prefix) for prefix in config.signature_paths)
 
 
 # ---------------------------------------------------------------------------
@@ -33,6 +55,16 @@ class Store:
     ip_counter: Counter = None
     ip_bot_counter: Counter = None
     country_counter: Counter = None
+    url_counter: Counter = None
+    url_bot_counter: Counter = None
+    url_error_counter: Counter = None
+    ua_counter: Counter = None
+    ua_bot_counter: Counter = None
+    ua_ips: dict = None
+    ua_noref_counter: Counter = None
+    ua_sig_counter: Counter = None
+    ua_sig_ips: dict = None
+    domain_counters: dict = None
     rule_hit_counter: Counter = None
     total: int = 0
     bots: int = 0
@@ -46,16 +78,37 @@ class Store:
         self.ip_counter = Counter()
         self.ip_bot_counter = Counter()
         self.country_counter = Counter()
+        self.url_counter = Counter()
+        self.url_bot_counter = Counter()
+        self.url_error_counter = Counter()
+        self.ua_counter = Counter()
+        self.ua_bot_counter = Counter()
+        self.ua_ips = {}
+        self.ua_noref_counter = Counter()
+        self.ua_sig_counter = Counter()
+        self.ua_sig_ips = {}
+        self.domain_counters = {
+            src: {"total": Counter(), "bots": Counter(), "errors": Counter()}
+            for src in ("referer", "url")
+        }
         self.rule_hit_counter = Counter()
         self.heavy_user_ips = set()
 
     def add_entry(self, entry: LogEntry) -> None:
         self.entries.append(entry)
         self.ip_counter[entry.ip] += 1
+        url = entry.path or "-"
+        self.url_counter[url] += 1
+        if entry.status >= 400:
+            self.url_error_counter[url] += 1
+        self._count_domains(entry)
+        self._count_user_agent(entry)
         self.total += 1
         if entry.is_bot:
             self.bots += 1
             self.ip_bot_counter[entry.ip] += 1
+            self.url_bot_counter[url] += 1
+            self.ua_bot_counter[entry.user_agent or "-"] += 1
             info = get_bot_info(entry.user_agent)
             if info["rule_id"]:
                 self.rule_hit_counter[info["rule_id"]] += 1
@@ -63,12 +116,46 @@ class Store:
             self.humans += 1
         self.country_counter[entry.country_code] += 1
 
+    def _count_user_agent(self, entry: LogEntry) -> None:
+        ua = entry.user_agent or "-"
+        self.ua_counter[ua] += 1
+        ips = self.ua_ips.setdefault(ua, set())
+        if len(ips) < MAX_IPS_PER_UA:
+            ips.add(entry.ip)
+
+        # The signature conjunction: no Referer, on one of the configured
+        # paths. Counted at ingest like every other counter, so changing
+        # config.signature_paths re-tails the log (see api_config_update).
+        if not _has_referer(entry.referer):
+            self.ua_noref_counter[ua] += 1
+            if _matches_signature_path(entry.path):
+                self.ua_sig_counter[ua] += 1
+                sig_ips = self.ua_sig_ips.setdefault(ua, set())
+                if len(sig_ips) < MAX_IPS_PER_UA:
+                    sig_ips.add(entry.ip)
+
+    def _count_domains(self, entry: LogEntry) -> None:
+        for source, key in (
+            ("referer", referer_domain(entry.referer)),
+            ("url", url_domain(entry.path)),
+        ):
+            if not key:
+                continue
+            counters = self.domain_counters[source]
+            counters["total"][key] += 1
+            if entry.is_bot:
+                counters["bots"][key] += 1
+            if entry.status >= 400:
+                counters["errors"][key] += 1
+
     def stats(self) -> dict:
         return {
             "total": self.total,
             "humans": self.humans,
             "bots": self.bots,
             "countries": len(self.country_counter),
+            "unique_urls": len(self.url_counter),
+            "unique_user_agents": len(self.ua_counter),
             "heavy_users": len(self.heavy_user_ips),
             "outlier_threshold": round(self.outlier_threshold, 1),
             "log_file": config.log_file,
@@ -82,6 +169,18 @@ class Store:
         self.ip_counter.clear()
         self.ip_bot_counter.clear()
         self.country_counter.clear()
+        self.url_counter.clear()
+        self.url_bot_counter.clear()
+        self.url_error_counter.clear()
+        self.ua_counter.clear()
+        self.ua_bot_counter.clear()
+        self.ua_ips.clear()
+        self.ua_noref_counter.clear()
+        self.ua_sig_counter.clear()
+        self.ua_sig_ips.clear()
+        for counters in self.domain_counters.values():
+            for c in counters.values():
+                c.clear()
         self.rule_hit_counter.clear()
         self.total = 0
         self.bots = 0
@@ -297,7 +396,14 @@ async def lifespan(app: FastAPI):
     for e in store.entries:
         e.is_heavy_user = e.ip in store.heavy_user_ips
 
-    # Track where the file is now
+    # Track where the file is now, so the watcher does not re-read (and
+    # double-count) the lines the initial tail already loaded.
+    global _watcher_reset_to
+    try:
+        _watcher_reset_to = os.path.getsize(config.log_file)
+    except OSError:
+        _watcher_reset_to = 0
+
     watcher_task = asyncio.create_task(_watch_log())
     reset_task   = asyncio.create_task(_auto_reset_watcher())
     yield
@@ -382,6 +488,76 @@ async def api_ip_stats(limit: int = 500):
         "threshold": round(store.outlier_threshold, 1),
         "unique_ips": len(store.ip_counter),
     }
+
+
+@app.get("/api/url-stats")
+async def api_url_stats(
+    group: str = "path",
+    q: str = "",
+    limit: int = 500,
+):
+    return aggregate_urls(
+        store.url_counter,
+        store.url_bot_counter,
+        store.url_error_counter,
+        group=group,
+        query=q,
+        limit=limit,
+    )
+
+
+@app.get("/api/ua-stats")
+async def api_ua_stats(
+    group: str = "full",
+    q: str = "",
+    limit: int = 500,
+    bots_only: bool = False,
+    min_requests: int = 1,
+    no_referer_only: bool = False,
+    signature_only: bool = False,
+    min_signature_share: float = 0.0,
+):
+    report = aggregate_uas(
+        store.ua_counter,
+        store.ua_bot_counter,
+        store.ua_ips,
+        group=group,
+        query=q,
+        limit=limit,
+        bots_only=bots_only,
+        min_requests=min_requests,
+        ip_cap=MAX_IPS_PER_UA,
+        ua_noref_counter=store.ua_noref_counter,
+        ua_sig_counter=store.ua_sig_counter,
+        ua_sig_ips=store.ua_sig_ips,
+        no_referer_only=no_referer_only,
+        signature_only=signature_only,
+        min_signature_share=min_signature_share,
+    )
+    report["signature_paths"] = list(config.signature_paths)
+    for row in report["user_agents"]:
+        info = get_bot_info(row["sample"])
+        row["rule_id"] = info["rule_id"]
+        row["rule_name"] = info["rule_name"]
+    return report
+
+
+@app.get("/api/domain-stats")
+async def api_domain_stats(
+    source: str = "referer",
+    q: str = "",
+    limit: int = 500,
+):
+    src = "url" if source == "url" else "referer"
+    counters = store.domain_counters[src]
+    return aggregate_domains(
+        counters["total"],
+        counters["bots"],
+        counters["errors"],
+        source=src,
+        query=q,
+        limit=limit,
+    )
 
 
 @app.get("/api/geo-stats")
@@ -474,6 +650,7 @@ async def api_config():
         "ignore_ips": config.ignore_ips,
         "reset_interval": config.reset_interval,
         "next_reset_at": _get_next_reset_iso(),
+        "signature_paths": config.signature_paths,
     }
 
 
@@ -489,6 +666,19 @@ async def api_config_update(body: dict):
             "reset_interval": config.reset_interval,
             "next_reset_at": _get_next_reset_iso(),
         }
+
+    if "signature_paths" in body:
+        raw = body["signature_paths"]
+        vals = raw if isinstance(raw, list) else str(raw).split(",")
+        paths = [str(p).strip() for p in vals if str(p).strip()]
+        if not paths:
+            from fastapi import HTTPException
+            raise HTTPException(status_code=422, detail="signature_paths must not be empty")
+        config.signature_paths = paths
+        # Signature counts are accumulated at ingest, so the tail has to be
+        # replayed for the new paths to take effect.
+        await _reload_tail()
+        return {"signature_paths": config.signature_paths}
 
     if "tail_lines" in body:
         val = int(body["tail_lines"])
